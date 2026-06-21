@@ -1,0 +1,31 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+	<EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+	<CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+	<GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</GameDir>
+	<OutputPath>$(GameDir)\mods\CookieCursor\</OutputPath>
+	<AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+	<Optimize>true</Optimize>
+	<DebugType>none</DebugType>
+	<DebugSymbols>false</DebugSymbols>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
+  </PropertyGroup>
+	<ItemGroup>
+		<Reference Include="Sts2.Core">
+			<HintPath>$(GameDir)\data_sts2_windows_x86_64\sts2.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+		<Reference Include="GodotSharp">
+			<HintPath>$(GameDir)\data_sts2_windows_x86_64\GodotSharp.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+		<Reference Include="0Harmony">
+			<HintPath>$(GameDir)\data_sts2_windows_x86_64\0Harmony.dll</HintPath>
+			<Private>False</Private>
+		</Reference>
+	</ItemGroup>
+</Project>

@@ -1,0 +1,7 @@
+Directory.Build.props
+bin/
+obj/
+*.user
+*.userosscache
+*.sln.docstates
+.vs/
