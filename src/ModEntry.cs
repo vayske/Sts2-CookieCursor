@@ -34,7 +34,6 @@ namespace CookieCursor
                         {                    
                             ModEntry.LocalId = player.NetId;
                             ModEntry.ApplyLocalCursor(ModEntry.PlayersCharacter[player.NetId], cursorManager);
-
                         }
                     }
                 }
@@ -51,20 +50,6 @@ namespace CookieCursor
         }
     }
 
-    [HarmonyPatch(typeof(NCursorManager), nameof(NCursorManager.StopOverridingCursor))]
-    public static class ReplaceCursor
-    {
-        static void Postfix()
-        {
-            var cursorManager = NGame.Instance?.CursorManager;
-            var runManager = RunManager.Instance;
-            if (cursorManager != null && runManager.IsInProgress)
-            {
-                ModEntry.ApplyLocalCursor(ModEntry.PlayersCharacter[ModEntry.LocalId], cursorManager);
-            }
-        }
-    }
-
     [HarmonyPatch(typeof(RunManager), nameof(RunManager.CleanUp))]
     public static class RevertCursor
     {
@@ -73,7 +58,7 @@ namespace CookieCursor
             var cursorManager = NGame.Instance?.CursorManager;
             if (cursorManager != null)
             {
-                cursorManager.StopOverridingCursor();
+                ModEntry.RevertLocalCursor(cursorManager);
             }
             ModEntry.PlayersCharacter.Clear();
             ModEntry.RemoteCursor.Clear();
@@ -86,44 +71,131 @@ namespace CookieCursor
         public static Dictionary<ulong, string> PlayersCharacter { get; set; } = new Dictionary<ulong, string>();
         public static Dictionary<ulong, NRemoteMouseCursor> RemoteCursor { get; set; } = new Dictionary<ulong, NRemoteMouseCursor>();
         public static ulong LocalId;
+        public static Image? defaultCursorNotTilted;
+        public static Image? defaultCursorTilted;
+        
         public static void Initialize()
         {
             var harmony = new Harmony("com.sincel.cookiecursor");
             harmony.PatchAll();
+            GD.Print("[CookieCursor] Mod initialized successfully.");
         }
+
         public static void ApplyLocalCursor(string character, NCursorManager cursorManager)
         {
-            Image image = GetCharCookies(character);
-            cursorManager.OverrideCursor(image, image, Vector2.Zero);
+            (Image notTilted, Image tilted) = GetCharCookies(character);
+            if (notTilted == null || tilted == null)
+            {
+                GD.PrintErr($"[CookieCursor] Failed to apply local cursor. Assets for '{character}' missing.");
+                return;
+            }
+
+            var notTiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorNotTilted");
+            var tiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
+
+            defaultCursorNotTilted = (Image)notTiltedField.GetValue(cursorManager)!;
+            defaultCursorTilted = (Image)tiltedField.GetValue(cursorManager)!;
+            notTiltedField.SetValue(cursorManager, notTilted);
+            tiltedField.SetValue(cursorManager, tilted);
+            cursorManager.StopOverridingCursor();
         }
 
         public static void ApplyRemoteCursor(ulong playerId)
         {
             if (RemoteCursor.TryGetValue(playerId, out var cursor) && PlayersCharacter.TryGetValue(playerId, out var charName))
             {
-                Image image = GetCharCookies(charName);
-                ImageTexture imageTex = ImageTexture.CreateFromImage(image);
-                var defaultTex = AccessTools.Field(typeof(NRemoteMouseCursor), "_defaultCursorTexture");
-                var tiltedTex = AccessTools.Field(typeof(NRemoteMouseCursor), "_tiltedCursorTexture");
-                defaultTex.SetValue(cursor, imageTex);
-                tiltedTex.SetValue(cursor, imageTex);
+                (Image notTilted, Image tilted) = GetCharCookies(charName);
+                if (notTilted == null || tilted == null)
+                {
+                    GD.PrintErr($"[CookieCursor] Failed to apply remote cursor. Assets for '{charName}' missing.");
+                    return;
+                }
+
+                ImageTexture notTiltedTex = ImageTexture.CreateFromImage(notTilted);
+                ImageTexture tiltedTex = ImageTexture.CreateFromImage(tilted);
+
+                var notTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_defaultCursorTexture");
+                var tiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_tiltedCursorTexture");
+                notTiltedTexField.SetValue(cursor, notTiltedTex);
+                tiltedTexField.SetValue(cursor, tiltedTex);
+
                 cursor.RefreshSize();
             }         
         }
 
-        public static Image GetCharCookies(string character)
+        public static void RevertLocalCursor(NCursorManager cursorManager)
+        {
+            if (defaultCursorNotTilted != null && defaultCursorTilted != null)
+            {
+                var notTiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorNotTilted");
+                var tiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
+                notTiltedField.SetValue(cursorManager, defaultCursorNotTilted);
+                tiltedField.SetValue(cursorManager, defaultCursorTilted);
+                cursorManager.StopOverridingCursor();
+            }
+        }
+
+        public static (Image notTilted, Image tilted ) GetCharCookies(string character)
         {
             if (character == "necrobinder") character = "necro";
             string path = $"res://images/relics/yummy_cookie_{character}.png";
             var texture = PreloadManager.Cache.GetAsset<Texture2D>(path);
-            if (texture == null) return null;
+            if (texture == null) return (null, null); 
 
-            Image image = texture.GetImage();
-            if (image.IsCompressed()) image.Decompress();
-            int newWidth = image.GetWidth() / 4;
-            int newHeight = image.GetHeight() / 4;
-            image.Resize(newWidth, newHeight, Image.Interpolation.Lanczos);
-            return image;
+            Image notTilted = texture.GetImage();
+            if (notTilted.IsCompressed()) notTilted.Decompress();
+
+            Image temp = (Image)notTilted.Duplicate();
+            Image tilted = RotateImageManually(temp, -10f);
+
+            int newWidth = notTilted.GetWidth() / 4;
+            int newHeight = notTilted.GetHeight() / 4;
+            notTilted.Resize(newWidth, newHeight, Image.Interpolation.Lanczos);
+            tilted.Resize(newWidth, newHeight, Image.Interpolation.Lanczos);
+            return (notTilted, tilted);
+        }
+
+        public static Image RotateImageManually(Image source, float degrees)
+        {
+            float rad = Mathf.DegToRad(degrees);
+            float cos = Mathf.Abs(Mathf.Cos(rad));
+            float sin = Mathf.Abs(Mathf.Sin(rad));
+
+            int originalWidth = source.GetWidth();
+            int originalHeight = source.GetHeight();
+
+            int boundW = Mathf.CeilToInt(originalWidth * cos + originalHeight * sin);
+            int boundH = Mathf.CeilToInt(originalWidth * sin + originalHeight * cos);
+
+            Image rotated = Image.CreateEmpty(boundW, boundH, false, Image.Format.Rgba8);
+            rotated.Fill(new Color(0, 0, 0, 0));
+
+            Vector2 sourceCenter = new Vector2(originalWidth / 2f, originalHeight / 2f);
+            Vector2 targetCenter = new Vector2(boundW / 2f, boundH / 2f);
+
+            float rCos = Mathf.Cos(rad);
+            float rSin = Mathf.Sin(rad);
+
+            for (int y = 0; y < rotated.GetHeight(); y++)
+            {
+                for (int x = 0; x < rotated.GetWidth(); x++)
+                {
+                    Vector2 pos = new Vector2(x, y) - targetCenter;
+
+                    float nx = pos.X * rCos + pos.Y * rSin;
+                    float ny = -pos.X * rSin + pos.Y * rCos;
+
+                    Vector2 sourcePos = new Vector2(nx, ny) + sourceCenter;
+
+                    if (sourcePos.X >= 0 && sourcePos.X < source.GetWidth() &&
+                        sourcePos.Y >= 0 && sourcePos.Y < source.GetHeight())
+                    {
+                        rotated.SetPixel(x, y, source.GetPixelv((Vector2I)sourcePos));
+                    }
+                }
+            }
+            rotated.Resize(originalWidth, originalHeight, Image.Interpolation.Lanczos);
+            return rotated;
         }
     }
 }
