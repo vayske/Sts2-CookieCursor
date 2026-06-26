@@ -1,7 +1,7 @@
 {
     "id": "CookieCursor",
     "name": "CookieCursor",
-    "version": "0.2.0",
+    "version": "0.3.0",
     "min_game_version": "0.107.0",
     "author": "SinceL",
     "has_dll": true,

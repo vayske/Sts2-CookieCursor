@@ -11,7 +11,7 @@ using HarmonyLib;
 namespace CookieCursor
 {
     [HarmonyPatch(typeof(RunManager), nameof(RunManager.Launch))]
-    public static class ReplaceLocalCursor
+    public static class ReplaceCursor
     {
         static void Postfix(ref RunState __result)
         {
@@ -22,18 +22,19 @@ namespace CookieCursor
             {
                 if (state != null)
                 {
-                    foreach(Player player in state.Players)
+                    foreach (Player player in state.Players)
                     {
                         string character = player.Character.GetType().Name.ToLower();
                         ModEntry.PlayersCharacter[player.NetId] = character;
-                        if (ModEntry.RemoteCursor.ContainsKey(player.NetId))
+
+                        if (runManager.NetService.NetId == player.NetId) 
                         {
-                            ModEntry.ApplyRemoteCursor(player.NetId);
-                        } 
-                        else
-                        {                    
                             ModEntry.LocalId = player.NetId;
                             ModEntry.ApplyLocalCursor(ModEntry.PlayersCharacter[player.NetId], cursorManager);
+                        }
+                        else
+                        {
+                            ModEntry.ApplyRemoteCursor(player.NetId);
                         }
                     }
                 }
@@ -42,11 +43,20 @@ namespace CookieCursor
     }
 
     [HarmonyPatch(typeof(NRemoteMouseCursor), nameof(NRemoteMouseCursor.Create))]
-    public static class RelaceRemoteCursor
+    public static class StoreRemoteCursor
     {
         static void Postfix(ulong playerId, NRemoteMouseCursor __result)
         {
             ModEntry.RemoteCursor[playerId] = __result;
+
+            if (ModEntry.PlayersCharacter.ContainsKey(playerId))
+            {
+                Callable.From(() =>
+                {
+                    ModEntry.ApplyRemoteCursor(playerId);
+                    GD.Print($"[CookieCursor] Applied remote cursor for player {playerId} deferred.");
+                }).CallDeferred();
+            }
         }
     }
 
@@ -68,12 +78,26 @@ namespace CookieCursor
     [ModInitializer("Initialize")]
     public class ModEntry
     {
+        private static readonly System.Reflection.FieldInfo NotTiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorNotTilted");
+        private static readonly System.Reflection.FieldInfo TiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
+        private static readonly System.Reflection.FieldInfo RemoteNotTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_defaultCursorTexture");
+        private static readonly System.Reflection.FieldInfo RemoteTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_tiltedCursorTexture");
+        
+        private static readonly Dictionary<string, (string Path, float TiltAngle)> CookieConfigs = new Dictionary<string, (string Path, float TiltAngle)>
+        {
+            { "ironclad", ("res://images/relics/yummy_cookie_ironclad.png", 3.0f) },
+            { "silent", ("res://images/relics/yummy_cookie_silent.png", 6.5f) },
+            { "defect", ("res://images/relics/yummy_cookie_defect.png", 6.5f) },
+            { "regent", ("res://images/relics/yummy_cookie_regent.png", 4.0f) },
+            { "necrobinder", ("res://images/relics/yummy_cookie_necro.png", 10.0f) }
+        };
+
         public static Dictionary<ulong, string> PlayersCharacter { get; set; } = new Dictionary<ulong, string>();
         public static Dictionary<ulong, NRemoteMouseCursor> RemoteCursor { get; set; } = new Dictionary<ulong, NRemoteMouseCursor>();
         public static ulong LocalId;
         public static Image? defaultCursorNotTilted;
         public static Image? defaultCursorTilted;
-        
+
         public static void Initialize()
         {
             var harmony = new Harmony("com.sincel.cookiecursor");
@@ -90,20 +114,31 @@ namespace CookieCursor
                 return;
             }
 
-            var notTiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorNotTilted");
-            var tiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
-
-            defaultCursorNotTilted = (Image)notTiltedField.GetValue(cursorManager)!;
-            defaultCursorTilted = (Image)tiltedField.GetValue(cursorManager)!;
-            notTiltedField.SetValue(cursorManager, notTilted);
-            tiltedField.SetValue(cursorManager, tilted);
-            cursorManager.StopOverridingCursor();
+            if (cursorManager != null)
+            {
+                if (defaultCursorNotTilted == null && defaultCursorTilted == null)
+                {
+                    defaultCursorNotTilted = (Image)NotTiltedField.GetValue(cursorManager)!;
+                    defaultCursorTilted = (Image)TiltedField.GetValue(cursorManager)!;
+                }
+                NotTiltedField.SetValue(cursorManager, notTilted);
+                TiltedField.SetValue(cursorManager, tilted);
+                cursorManager.StopOverridingCursor();
+            }
+            
         }
 
         public static void ApplyRemoteCursor(ulong playerId)
         {
             if (RemoteCursor.TryGetValue(playerId, out var cursor) && PlayersCharacter.TryGetValue(playerId, out var charName))
             {
+                if (!GodotObject.IsInstanceValid(cursor) || cursor.IsQueuedForDeletion())
+                {
+                    GD.PrintErr($"[CookieCursor] Remote cursor for player {playerId} was disposed. Removing invalid reference.");
+                    RemoteCursor.Remove(playerId);
+                    return;
+                }
+
                 (Image notTilted, Image tilted) = GetCharCookies(charName);
                 if (notTilted == null || tilted == null)
                 {
@@ -113,40 +148,50 @@ namespace CookieCursor
 
                 ImageTexture notTiltedTex = ImageTexture.CreateFromImage(notTilted);
                 ImageTexture tiltedTex = ImageTexture.CreateFromImage(tilted);
-
-                var notTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_defaultCursorTexture");
-                var tiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_tiltedCursorTexture");
-                notTiltedTexField.SetValue(cursor, notTiltedTex);
-                tiltedTexField.SetValue(cursor, tiltedTex);
-
-                cursor.RefreshSize();
-            }         
+                
+                if (cursor != null)
+                {
+                    RemoteNotTiltedTexField.SetValue(cursor, notTiltedTex);
+                    RemoteTiltedTexField.SetValue(cursor, tiltedTex);
+                    cursor.RefreshSize();
+                }
+            }
         }
 
         public static void RevertLocalCursor(NCursorManager cursorManager)
         {
             if (defaultCursorNotTilted != null && defaultCursorTilted != null)
             {
-                var notTiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorNotTilted");
-                var tiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
-                notTiltedField.SetValue(cursorManager, defaultCursorNotTilted);
-                tiltedField.SetValue(cursorManager, defaultCursorTilted);
+                NotTiltedField.SetValue(cursorManager, defaultCursorNotTilted);
+                TiltedField.SetValue(cursorManager, defaultCursorTilted);
                 cursorManager.StopOverridingCursor();
             }
+            defaultCursorNotTilted = null;
+            defaultCursorTilted = null;
         }
 
-        public static (Image notTilted, Image tilted ) GetCharCookies(string character)
+        public static (Image notTilted, Image tilted) GetCharCookies(string character)
         {
-            if (character == "necrobinder") character = "necro";
-            string path = $"res://images/relics/yummy_cookie_{character}.png";
-            var texture = PreloadManager.Cache.GetAsset<Texture2D>(path);
-            if (texture == null) return (null, null); 
+            if (!CookieConfigs.TryGetValue(character, out var config))
+            {
+                GD.PrintErr("[CookieCursor] Unknown character requested: " + character);
+                return (null, null);
+            }
+
+            var texture = PreloadManager.Cache.GetAsset<Texture2D>(config.Path);
+            if (texture == null)
+            {
+                GD.PrintErr("[CookieCursor] Failed to load texture at path: " + config.Path);
+                return (null, null);
+            }
 
             Image notTilted = texture.GetImage();
             if (notTilted.IsCompressed()) notTilted.Decompress();
 
             Image temp = (Image)notTilted.Duplicate();
-            Image tilted = RotateImageManually(temp, -10f);
+            Image tilted = RotateImageManually(temp, -config.TiltAngle);
+            notTilted = RotateImageManually(notTilted, config.TiltAngle);
+            temp.Dispose();
 
             int newWidth = notTilted.GetWidth() / 4;
             int newHeight = notTilted.GetHeight() / 4;
