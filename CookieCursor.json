@@ -1,12 +1,12 @@
 {
     "id": "CookieCursor",
     "name": "CookieCursor",
-    "version": "0.3.0",
+    "version": "0.5.0",
     "min_game_version": "0.107.0",
     "author": "SinceL",
     "has_dll": true,
     "dependencies": [],
     "description": "Changes the cursor based on your character",
     "affects_gameplay": false,
-    "entry_point": "CookieCursor.ModEntry"
+    "entry_point": "CookieCursor.Entry"
 }
