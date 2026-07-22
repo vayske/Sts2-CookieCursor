@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Assets;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Runs;
 using System.Reflection;
+using MegaCrit.Sts2.Core.Models;
 
 namespace CookieCursor
 {
@@ -15,10 +16,9 @@ namespace CookieCursor
         private static readonly System.Reflection.FieldInfo TiltedField = AccessTools.Field(typeof(NCursorManager), "_cursorTilted");
         private static readonly System.Reflection.FieldInfo RemoteNotTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_defaultCursorTexture");
         private static readonly System.Reflection.FieldInfo RemoteTiltedTexField = AccessTools.Field(typeof(NRemoteMouseCursor), "_tiltedCursorTexture");
-        private static readonly string ConfigPath = Path.Combine(
-            Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? ".",
-            "Cursor.cfg"
-        );
+        private static readonly string ModDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) ?? ".";
+        private static readonly string CustomCursorsDir = Path.Combine(ModDir, "Cursors");
+        private static readonly string ConfigPath = Path.Combine(ModDir, "Cursor.cfg");
 
         private static readonly Dictionary<string, (string Path, float TiltAngle, Vector2 BaseHotSpot)> CookieConfigs = new Dictionary<string, (string Path, float TiltAngle, Vector2 BaseHotSpot)>
         {
@@ -29,7 +29,8 @@ namespace CookieCursor
             { "regent", ("res://images/relics/yummy_cookie_regent.png", 5.0f, new Vector2(11f, 3f))},
             { "necrobinder", ("res://images/relics/yummy_cookie_necro.png", 5.0f, new Vector2(8f, 3f))}
         };
-        private static readonly Dictionary<string, (Image notTilted, Image tilted, Vector2 BaseHotSpot)> RotatedCookieCache = new Dictionary<string, (Image, Image, Vector2 BaseHotSpot)>();
+
+        private static readonly Dictionary<string, (Image notTilted, Image tilted, Vector2 BaseHotSpot, DateTime LastWriteTime)> RotatedCookieCache = new Dictionary<string, (Image, Image, Vector2 BaseHotSpot, DateTime LastWriteTime)>();
         public static Dictionary<ulong, string> PlayersCharacter { get; set; } = new Dictionary<ulong, string>();
         public static Dictionary<ulong, NRemoteMouseCursor> RemoteCursor { get; set; } = new Dictionary<ulong, NRemoteMouseCursor>();
 
@@ -48,7 +49,7 @@ namespace CookieCursor
             {
                 if (defaultCursorNotTilted == null)
                 {
-                    StoreDefaultCursorImage(cursorManager);
+                    CacheDefaultCursorImage(cursorManager);
                 }
                 
                 (Image notTilted, Image tilted, Vector2 hotSpot) = GetCharCookies(character);
@@ -128,7 +129,7 @@ namespace CookieCursor
             ApplyLocalCursor("default", cursorManager);
         }
 
-        public static void StoreDefaultCursorImage(NCursorManager cursorManager)
+        public static void CacheDefaultCursorImage(NCursorManager cursorManager)
         {
             ref Vector2 defaultHotSpotRef = ref AccessTools.StaticFieldRefAccess<Vector2>(typeof(NCursorManager), "_defaultHotSpot");
             if (defaultCursorNotTilted == null && defaultCursorTilted == null)
@@ -142,6 +143,12 @@ namespace CookieCursor
                 defaultHotSpot = defaultHotSpotRef;
                 GD.Print($"[CookieCursor] Store defaultHotSpot = {defaultHotSpot}");
             }
+        }
+
+        public static void ResetCache()
+        {
+            PlayersCharacter.Clear();
+            RemoteCursor.Clear();
         }
 
         public static void OnChangeCursorScale(double scale)
@@ -230,39 +237,107 @@ namespace CookieCursor
             }
         }
 
+        public static void InitDefaultIconDir()
+        {
+            try
+            {
+                if (!Directory.Exists(CustomCursorsDir))
+                {
+                    Directory.CreateDirectory(CustomCursorsDir);
+                    GD.Print($"[CookieCursor] Created base Cursors directory: {CustomCursorsDir}");
+                }
+
+                foreach (var entry in CookieConfigs)
+                {
+                    if (entry.Key == "default") continue;  
+                    string character = entry.Key;
+                    string resPath = entry.Value.Path;
+                    string charDir = Path.Combine(CustomCursorsDir, character);
+                    if (!Directory.Exists(charDir))
+                    {
+                        Directory.CreateDirectory(charDir);
+                        GD.Print($"[CookieCursor] Created character directory: {charDir}");
+                    }
+                    string iconPath = Path.Combine(charDir, "icon.png");
+                    if (!File.Exists(iconPath))
+                    {
+                        Texture2D texture = PreloadManager.Cache.GetAsset<Texture2D>(resPath);
+                        if (texture == null) continue;
+                        Image img = texture.GetImage();
+                        if (img == null) continue;
+                        if (img.IsCompressed()) img.Decompress();
+                        img.SavePng(iconPath);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                GD.PrintErr($"[CookieCursor] Failed to initialize icon directories: {ex.Message}");
+            }
+        }
+
+        public static void CacheCharCookies()
+        {
+            string[] subDirectories = Directory.GetDirectories(CustomCursorsDir);
+            foreach (string dirPath in subDirectories) {
+                string folderName = Path.GetFileName(dirPath);
+                string character = folderName.ToLowerInvariant();
+                if (character == "default") continue;
+                string iconPath = Path.Combine(dirPath, "icon.png");
+                if (!File.Exists(iconPath)) continue;
+                DateTime fileLastWriteTime = File.GetLastWriteTimeUtc(iconPath);
+                if (RotatedCookieCache.TryGetValue(character, out var cachedData))
+                {
+                    if (cachedData.LastWriteTime == fileLastWriteTime)
+                    {
+                        continue;
+                    }
+                }
+                Image tempNotTilted = Image.LoadFromFile(iconPath);
+                if (tempNotTilted.IsCompressed()) tempNotTilted.Decompress();
+                float tiltAngle = 5.0f;
+                Vector2 hotspot = new Vector2(14f, 5f);
+                if (CookieConfigs.TryGetValue(character, out var config))
+                {
+                    tiltAngle = config.TiltAngle;
+                    hotspot = config.BaseHotSpot;
+                }
+                Image notTilted = RotateImageManually(tempNotTilted, tiltAngle);
+                Image tilted = RotateImageManually(tempNotTilted, -tiltAngle);
+                tempNotTilted.Dispose();
+                var baseImages = (notTilted, tilted, hotspot, fileLastWriteTime);
+                RotatedCookieCache[character] = baseImages;
+            }
+            GD.Print($"[CookieCursor] Pre-cached {RotatedCookieCache.Count} character cursor sets successfully.");
+        }
+
         // Interal
         private static (Image notTilted, Image tilted, Vector2 hotSpot) GetCharCookies(string character)
         {
             if (!RotatedCookieCache.TryGetValue(character, out var baseImages)) {
-                if (!CookieConfigs.TryGetValue(character, out var config))
+                if (character == "default")
                 {
-                    GD.PrintErr("[CookieCursor] Unknown character requested: " + character);
-                    return (null, null, Vector2.Zero);
-                }
-
-                if (character != "default") {
-                    var texture = PreloadManager.Cache.GetAsset<Texture2D>(config.Path);
-                    if (texture == null)
-                    {
-                        GD.PrintErr("[CookieCursor] Failed to load texture at path: " + config.Path);
-                        return (null, null, Vector2.Zero);
-                    }
-                    Image tempNotTilted = new Image();
-                    tempNotTilted.CopyFrom(texture.GetImage());
-                    if (tempNotTilted.IsCompressed()) tempNotTilted.Decompress();
-                    Image notTilted = RotateImageManually(tempNotTilted, config.TiltAngle);
-                    Image tilted = RotateImageManually(tempNotTilted, -config.TiltAngle);
-                    tempNotTilted.Dispose();
-
-                    baseImages = (notTilted, tilted, config.BaseHotSpot);
+                    baseImages = (defaultCursorNotTilted, defaultCursorTilted, defaultHotSpot, DateTime.Now);
                     RotatedCookieCache[character] = baseImages;
                 } 
                 else
                 {
-                    baseImages = (defaultCursorNotTilted, defaultCursorTilted, config.BaseHotSpot);
-                    RotatedCookieCache[character] = baseImages;
+                    GD.Print($"[CookieCursor] Unknown character requested: '{character}'. Creating character directory...");
+                    string unknownCharDir = Path.Combine(CustomCursorsDir, character);
+                    if (!Directory.Exists(unknownCharDir))
+                    {
+                        try
+                        {
+                            Directory.CreateDirectory(unknownCharDir);
+                            GD.Print($"[CookieCursor] Auto-created directory for new character: {unknownCharDir}");
+                        }
+                        catch (Exception ex)
+                        {
+                            GD.PrintErr($"[CookieCursor] Failed to create directory for '{character}': {ex.Message}");
+                        }
+                    }
+                    return (null, null, Vector2.Zero);
                 }
-
             }
 
             Image finalNotTilted = (Image)baseImages.notTilted.Duplicate();

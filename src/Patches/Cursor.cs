@@ -2,7 +2,6 @@
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Nodes;
-using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.Multiplayer;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Runs;
@@ -47,7 +46,9 @@ namespace CookieCursor
         {
             var cursorManager = NGame.Instance?.CursorManager;
             Core.LoadConfig();
-            Core.StoreDefaultCursorImage(cursorManager);
+            Core.CacheDefaultCursorImage(cursorManager);
+            Core.InitDefaultIconDir();
+            Core.CacheCharCookies();
             Core.ApplyLocalCursor("default", cursorManager);
         }
     }
@@ -81,8 +82,7 @@ namespace CookieCursor
             {
                 Core.RevertLocalCursor(cursorManager);
             }
-            Core.PlayersCharacter.Clear();
-            Core.RemoteCursor.Clear();
+            Core.ResetCache();
         }
     }
 
