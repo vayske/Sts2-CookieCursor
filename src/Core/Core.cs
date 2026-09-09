@@ -7,6 +7,8 @@ using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Runs;
 using System.Reflection;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Relics;
+using MegaCrit.Sts2.Core.Entities.Players;
 
 namespace CookieCursor
 {
@@ -274,6 +276,71 @@ namespace CookieCursor
             {
                 GD.PrintErr($"[CookieCursor] Failed to initialize icon directories: {ex.Message}");
             }
+        }
+
+        public static string CharacterKey(Player player)
+        {
+            return player.Character.GetType().Name.ToLowerInvariant();
+        }
+
+        /// <summary>
+        /// Make sure this player's character has a cursor icon.
+        /// The five base game characters are seeded by InitDefaultIconDir from CookieConfigs.
+        /// Characters added by other mods are not in that table, so we ask the game for the
+        /// Yummy Cookie art it would show for this character and seed the icon from that.
+        /// An icon.png that is already on disk always wins, so hand made icons are never overwritten.
+        /// </summary>
+        public static void EnsureCharacterIcon(Player player)
+        {
+            string character = CharacterKey(player);
+            if (CookieConfigs.ContainsKey(character)) return;
+
+            try
+            {
+                string charDir = Path.Combine(CustomCursorsDir, character);
+                string iconPath = Path.Combine(charDir, "icon.png");
+                if (File.Exists(iconPath)) return;
+
+                Image? cookie = GetCookieImage(player);
+                if (cookie == null)
+                {
+                    GD.Print($"[CookieCursor] No Yummy Cookie art available for '{character}'. Keeping the default cursor.");
+                    return;
+                }
+
+                if (!Directory.Exists(charDir))
+                {
+                    Directory.CreateDirectory(charDir);
+                    GD.Print($"[CookieCursor] Created character directory: {charDir}");
+                }
+                cookie.SavePng(iconPath);
+                cookie.Dispose();
+                GD.Print($"[CookieCursor] Seeded cursor icon for '{character}' from its Yummy Cookie art: {iconPath}");
+                CacheCharCookies();
+            }
+            catch (Exception ex)
+            {
+                GD.PrintErr($"[CookieCursor] Failed to seed cursor icon for '{character}': {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Ask the game which Yummy Cookie art this player's character uses.
+        /// YummyCookie picks its icon from Owner.Character, so we hand a throwaway mutable copy
+        /// the player and read the icon back. Character mods that give the cookie their own art
+        /// are picked up automatically; ones that do not fall back to whatever the base game
+        /// shows for them, which is what the relic bar shows too.
+        /// </summary>
+        private static Image? GetCookieImage(Player player)
+        {
+            RelicModel cookie = ModelDb.Relic<YummyCookie>().ToMutable();
+            cookie.Owner = player;
+            Texture2D texture = cookie.BigIcon;
+            if (texture == null) return null;
+            Image image = texture.GetImage();
+            if (image == null) return null;
+            if (image.IsCompressed()) image.Decompress();
+            return image;
         }
 
         public static void CacheCharCookies()
