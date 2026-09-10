@@ -22,7 +22,8 @@ namespace CookieCursor
                 {
                     foreach (Player player in state.Players)
                     {
-                        string character = player.Character.GetType().Name.ToLower();
+                        Core.EnsureCharacterIcon(player);
+                        string character = Core.CharacterKey(player);
                         Core.PlayersCharacter[player.NetId] = character;
 
                         if (runManager.NetService.NetId == player.NetId)
