@@ -14,6 +14,23 @@ namespace CookieCursor
     [HarmonyPatch(typeof(NSettingsPanel), nameof(NSettingsPanel._Ready))]
     public class AddCursorConfigMenu
     {
+        /// <summary>
+        /// "Is the player navigating with a controller or the keyboard?", across game versions.
+        /// Up to v0.107 this was NControllerManager.IsUsingController. On the v0.111 branch that
+        /// property is gone and the equivalent is IsUsingDirectionalNavigation, which is also true
+        /// in keyboard only mode. Looked up by name so one build works on both.
+        /// </summary>
+        private static readonly System.Reflection.PropertyInfo? DirectionalInputProperty =
+            AccessTools.Property(typeof(NControllerManager), "IsUsingController")
+            ?? AccessTools.Property(typeof(NControllerManager), "IsUsingDirectionalNavigation");
+
+        private static bool IsUsingDirectionalInput()
+        {
+            NControllerManager manager = NControllerManager.Instance;
+            if (manager == null || DirectionalInputProperty == null) return false;
+            return DirectionalInputProperty.GetValue(manager) is bool value && value;
+        }
+
         static void Prefix(NSettingsPanel __instance)
         {
             if (__instance.Name != "GraphicsSettings") return;
@@ -122,7 +139,7 @@ namespace CookieCursor
                 Control.SignalName.FocusEntered,
                 Callable.From(() =>
                 {
-                    if (NControllerManager.Instance.IsUsingController)
+                    if (IsUsingDirectionalInput())
                     {
                         interalReticle.OnSelect();
                     }
